@@ -66,6 +66,7 @@ class core_t {
   static const uint32_t        DLIMBS=(LIMBS+TPI-1)/TPI;
   static const dlimbs_algs_t   DLIMBS_ALG=(LIMBS<=TPI/2) ? dlimbs_algs_half : (LIMBS<=TPI) ? dlimbs_algs_full : dlimbs_algs_multi;
   
+  // ========================================================================================================================
   /* core padding routine */
   
   __device__ __forceinline__ static uint32_t clear_carry(uint32_t &x) {
@@ -84,7 +85,12 @@ class core_t {
     dispatch_padding_t<core_t, PADDING>::clear_padding(x);
   }
   
+  // ========================================================================================================================
   /* CORE RESOLVER ROUTINES */
+  // This is the resolver interface regardless of subwarp, warp, or padded dispatch.
+  // see dispatch_resolver.cu
+
+
   __device__ __forceinline__ static int32_t  fast_negate(uint32_t &x) {
     return dispatch_resolver_t<core_t, TPI, PADDING>::fast_negate(x);
   }
@@ -96,7 +102,12 @@ class core_t {
   __device__ __forceinline__ static int32_t  fast_propagate_add(const int32_t carry, uint32_t &x) {
     return dispatch_resolver_t<core_t, TPI, PADDING>::fast_propagate_add(carry, x);
   }
+
+  // NOTE: There are some mismatches between the signatures? For example resolve_add(scalar x) below takes unsigned carry, whereas the padded_resolver implementation takes a signed carry...
   
+  // Say each thread (indepedently) finished performing an add across its local limbs (x is this sum), and knows if it carries out (carry)
+  // This function combines the results of all the threads in the group. That is, threads communicate their carry to each other and cooperate to produce a final result.
+  // Presumably only used for TPI > 1
   __device__ __forceinline__ static int32_t  fast_propagate_add(const uint32_t carry, uint32_t x[LIMBS]) {
     return dispatch_resolver_t<core_t, TPI, PADDING>::fast_propagate_add(carry, x);
   }
@@ -109,6 +120,7 @@ class core_t {
     return dispatch_resolver_t<core_t, TPI, PADDING>::fast_propagate_sub(carry, x);
   }
 
+  // similar to fast_propagate, except "carry" may be values other than 0, 1?
   __device__ __forceinline__ static int32_t resolve_add(const uint32_t carry, uint32_t &x) {
     return dispatch_resolver_t<core_t, TPI, PADDING>::resolve_add(carry, x);
   }
@@ -126,6 +138,7 @@ class core_t {
   }
 
 
+  // ========================================================================================================================
   // HELPER FUNCTIONS FOR GCD AND MOD INV
   __device__ __forceinline__ static void     gcd_product(const uint32_t sync, uint32_t r[LIMBS], const int32_t sa, const uint32_t a[LIMBS], const int32_t sb, const uint32_t b[LIMBS]);
   __device__ __forceinline__ static void     modinv_update_uw_qs(const uint32_t sync, uint32_t r[LIMBS], const uint32_t q, const int32_t s, const uint32_t x[LIMBS]);

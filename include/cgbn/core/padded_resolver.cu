@@ -24,6 +24,7 @@ IN THE SOFTWARE.
 
 namespace cgbn {
 
+// see this.
 template<class core, uint32_t tpi, uint32_t padding>
 class dispatch_resolver_t {
   public:

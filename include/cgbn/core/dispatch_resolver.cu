@@ -22,6 +22,16 @@ IN THE SOFTWARE.
 
 ***/
 
+// general
+    // in general to resolve is to combine results across all the threads in the group/problem_instance.
+    // Each resolve type file below creates different specializations of the class dispatch_resolver_t
+
+// Used when the number of total limbs in the whole problem instance cannot be evenly distributed to threads. That is, not all threads will hold an equal number of limbs.
+// padding refers to the extra space some threads have bc they don't have as many limbs.
 #include "padded_resolver.cu"
+
+// used when TPI=32 and padding = 0
 #include "warp_resolver.cu"
+
+// used when TPI < 32 and padding = 0
 #include "subwarp_resolver.cu"

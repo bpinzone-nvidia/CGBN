@@ -24,6 +24,7 @@ IN THE SOFTWARE.
 
 namespace cgbn {
 
+// see this
 template<class core>
 class dispatch_resolver_t<core, 32, 0> {
   public:
