@@ -22,11 +22,14 @@ IN THE SOFTWARE.
 
 ***/
 
+// d likely stands for distrbuted.
+
 namespace cgbn {
 
 template<uint32_t tpi, uint32_t limbs>
 __device__ __forceinline__ bool dequals(const uint32_t sync, const uint32_t a[limbs], const uint32_t b[limbs]) {
   static const uint32_t TPI_ONES=(1ull<<tpi)-1;
+  // see comments in core.cu :: instance_sync_mask about the masking and bit manipulation going on in this function.
   
   uint32_t group_thread=threadIdx.x & tpi-1, warp_thread=threadIdx.x & warpSize-1;
   uint32_t lor, mask;

@@ -179,7 +179,16 @@ class core_t {
   public:
   __device__ __forceinline__ static uint32_t instance_sync_mask() {
     uint32_t group_thread=threadIdx.x & TPI-1, warp_thread=threadIdx.x & warpSize-1;
-    
+
+    // group_thread: The thread's index within the group (problem instance)
+    // warp_thread: the threads index within the warp.
+    // (threadIdx.x is threads index within block)
+
+    // The expression "group_thread ^ warp_thread" = "TPI * intra_warp_instance_idx"
+    // intra_warp_instance_idx being: of all the problem instances solved by this warp, which one we are.
+    // That is, a certain number of problem instances will be handled by this warp. The intra-warp instance_idx is which instance within the warp.
+    // All threads will have the same value for this expression. (Since warp_thread - group_thread will be the same for every thread in the group). As xor "cuts" matching bits.
+      
     return TPI_ONES<<(group_thread ^ warp_thread);
   }
   
