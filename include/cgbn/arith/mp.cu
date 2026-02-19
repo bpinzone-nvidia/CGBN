@@ -22,6 +22,9 @@ IN THE SOFTWARE.
 
 ***/
 
+// these functions perform tpi=1 math.
+// Could use directly for tpi=1, or, for tpi>1 could use them to compute local limb results, before combining with other threads.
+
 namespace cgbn {
 
 template<uint32_t limbs>

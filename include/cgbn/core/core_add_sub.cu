@@ -24,6 +24,9 @@ IN THE SOFTWARE.
 
 namespace cgbn {
 
+// i believe these make NO assumptions about tpi. Could be anything.
+// that might be the case with this entire core/ folder?
+
 template<class env> 
 __device__ __forceinline__ int32_t core_t<env>::add(uint32_t r[LIMBS], const uint32_t a[LIMBS], const uint32_t b[LIMBS]) {
   uint32_t carry;
@@ -33,6 +36,8 @@ __device__ __forceinline__ int32_t core_t<env>::add(uint32_t r[LIMBS], const uin
   for(int32_t index=0;index<LIMBS;index++)
     r[index]=chain.add(a[index], b[index]);
   carry=chain.add(0, 0);
+
+  // dynamic dispatch. goes to core.cu, then to the resolver.
   return fast_propagate_add(carry, r);
 }
 
@@ -45,12 +50,14 @@ __device__ __forceinline__ int32_t core_t<env>::sub(uint32_t r[LIMBS], const uin
   for(int32_t index=0;index<LIMBS;index++)
     r[index]=chain.sub(a[index], b[index]);
   carry=chain.sub(0, 0);
+  // dynamic dispatch. goes to core.cu, then to the resolver.
   return -fast_propagate_sub(carry, r);
 } 
 
 template<class env> 
 __device__ __forceinline__ int32_t core_t<env>::negate(uint32_t r[LIMBS], const uint32_t a[LIMBS]) {
   mpset<LIMBS>(r, a);
+  // dynamic dispatch. goes to core.cu, then to the resolver.
   return fast_negate(r);
 } 
 

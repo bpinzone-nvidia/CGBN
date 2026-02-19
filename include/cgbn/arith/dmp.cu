@@ -22,7 +22,7 @@ IN THE SOFTWARE.
 
 ***/
 
-// d likely stands for distrbuted.
+// d likely stands for distrbuted. (tpi > 1)
 
 namespace cgbn {
 
