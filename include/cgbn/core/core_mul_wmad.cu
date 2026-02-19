@@ -144,6 +144,35 @@ __device__ __forceinline__ void core_t<env>::mul_wide(uint32_t lo[LIMBS], uint32
   uint32_t t, t0, t1, term0, term1, carry, rl[LIMBS], ra[LIMBS+2], ru[LIMBS+1];
   int32_t  threads=(PADDING!=0) ? (BITS/32)/LIMBS & 0xFFFE : TPI;
 
+  /*
+  I believe the complexity of this routine comes from the following:
+    we have tpi > 1
+    we are trying to generate mul_wide's efficiently.
+
+  Background:
+    Modern GPUs only have mul_wide instructions. They do not have mul_low and mul_high individually.
+    Hence, any time you want a mul_low, mul_high, mad_low, or mad_high, what is generated is a mul_wide.
+
+  Now, if you want to compute a madlo and madhigh with the same input data, and to only generate a SINGLE mul_wide, these are the requirements: (I believe if you violate them, it will wastefully generate a mul_wide for each of them.)
+    (1) the madlo and madhigh must appear right next to each other in SASS in order to be fused into a single mul_wide.
+    (2) the output register of the mul_wide instruction must be even.
+      registers are 32 bit.
+      You couldn't store your 64bit result in an odd register I suppose for alignment purposes???
+      Hence you would have to arrange your madlo and madhigh output registers to obey this?
+      There is some even/odd pattern that must be satisified. Not sure exactly how to articulate it.
+
+      What it seems to mean is that the madlo accumlation register must be an even index of a uint32_t array, and the madhi must be odd.
+        for example, the madlo acc register here is ra[index]
+
+          for(int32_t index=0;index<LIMBS;index+=2) {
+            ra[index]=chain1.madlo(a[index], term0, ra[index]);
+            ra[index+1]=chain1.madhi(a[index], term0, ra[index+1]);
+          }
+      
+      But based on the comments, looks like its not just the accumulator alignment that matters...but the first arg to madlo/hi as well...
+        not sure if "aligned" vs "unaligned" comments below necessarily indicate efficient mul_wide codegen...
+  */
+
   if(PADDING!=0)
     mpzero<LIMBS>(rl);
   mpset<LIMBS>(ra, add);
