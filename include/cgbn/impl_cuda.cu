@@ -1058,6 +1058,52 @@ __device__ __forceinline__ void cgbn_env_t<context_t, bits, syncable>::mont_redu
     cgbn::mpzero<LIMBS>(r._limbs);
 }
 
+/*
+CGBN data presentation foundations:
+  - BITS is the true/logical total number of bits in the big number instance. (what the user asked for)
+  - UNPADDED_BITS is BITS plus however much padding there is due to total instance limbs not being evenly divisible by the TPI. It is the number of bits materialized in memory.
+  - BEWARE of the typedefs that indicate we are using the unpadded core.
+      These apis assume there is NO PADDING in their input.
+      But if we are using them on data that DOES have padding, this implies we are managing a lot of low level details in this piece of code. That is, manually managing the padding.
+
+CGBN general utilities
+  - Note that for an unpadded core typedef, clz returns the PADDING PLUS THE TRUE CLZ.
+    - That is, if we feed unpadded core functions data that is actually padded, it pretends the padding is real data!
+
+General info about barrett implementations (both normal and wide)
+  - To meet requirements of the algorithm (division portion), we need the divisor to have no leading zeros. So we shift it left.
+    - This implies we ALSO need to shift the dividend left by the same amount. Might we worry about losing the high bits of the numerator? See below.
+  
+  - We will also store the barrett approximation in a different format than the HAC textbook.
+        Upon return, approx will be conceptually the barrett constant, except stored in a different format since it would not fit in N_BITS bits.
+            If m is the true barrett constant, m - B is stored, where B = 2^N_BITS
+                (Something about? From the divisor having no leading zeros, m will be between 2B and B???)
+
+        Let n = IMPL_T::N_BITS (note this is k in HAC textbook)
+        Let B = 2^n (One greater than the max value of an IMPL_T)
+            B = b^k in HAC textbook. Hence B^2 = b^(2k) in HAC textbook.
+
+        Below is a comment from cursor which seems accurate.
+            "approx" is computed... = floor((B² - 1) / d) - B, where B = 2^n and d = shifted (the normalized denominator).
+
+            Here's the trick: (high : low) represents a 2n-bit number. Setting every limb of low to 0xFFFFFFFF makes the bottom half all-ones (= B - 1). Setting every limb of high to ~shifted[index] makes the top half equal to B - 1 - d (since ~x = 0xFFFFFFFF - x for 32-bit words, and this works limb-by-limb for the full big number).
+
+            So the 2n-bit numerator is:
+                > high * B + low
+                > (B - 1 - d) × B + (B - 1)
+                > B² -B -dB + B - 1
+                > B² - d×B - 1
+
+            And then div_wide computes:
+                > approx = floor((B² - d×B - 1) / d)
+
+            Which equals floor(B²/d) - B (exactly, UNLESS d divides B² evenly, in which case it's floor(B²/d) - B - 1).
+
+            Hence, besides being in an alternate format, it may also be off by one.
+
+            The purpose is to compute the Barrett constant m = floor(B²/d) but stored as m - B so it fits in n bits. (Since d is normalized with its top bit set, m is between B and 2B, so m - B fits in n bits.)
+      */
+
 template<class context_t, uint32_t bits, cgbn_syncable_t syncable>
 __device__ __forceinline__ uint32_t cgbn_env_t<context_t, bits, syncable>::barrett_approximation(cgbn_t &approx, const cgbn_t &denom) const {
   typedef cgbn::unpadded_t<cgbn_env_t> unpadded;
@@ -1066,6 +1112,7 @@ __device__ __forceinline__ uint32_t cgbn_env_t<context_t, bits, syncable>::barre
   
   uint32_t shift, shifted[LIMBS], low[LIMBS], high[LIMBS];
 
+  // shift includes the leading zeros PLUS ANY PADDING!
   shift=core::clz(denom._limbs);
   if(_context.check_errors()) {
     if(shift==UNPADDED_BITS) {
@@ -1077,15 +1124,24 @@ __device__ __forceinline__ uint32_t cgbn_env_t<context_t, bits, syncable>::barre
   if(shift==UNPADDED_BITS)
     return 0xFFFFFFFF;
 
+  // this could have been a shift_left call, but rotate is more performant for getting zeros into the least sig bits.
   core::rotate_left(shifted, denom._limbs, shift);
+  // shifted now holds HAC's m.
   
   #pragma unroll
   for(int32_t index=0;index<LIMBS;index++) {
-    low[index]=0xFFFFFFFF;
+    low[index]=0xFFFFFFFF; // low = B - 1
     high[index]=~shifted[index];  // high=0xFFFFFFFF - shifted[index]
   }
+
+  // high:low now contains: ((B - 1) - d) × B + (B - 1)
+  //                        (high          )  + (low  )
+  // where d is the normalized denominator.
   
+  // note that we assume the quotient fits into single width. This is allowed here because of the alternate representation?
   singleton::div_wide(approx._limbs, low, high, shifted, TPI);
+  // aprrox now contains: m - B (the barrett constant/approximation minus B)
+
   return shift;
 }
 
@@ -1137,24 +1193,54 @@ __device__ __forceinline__ void cgbn_env_t<context_t, bits, syncable>::barrett_r
   uint32_t word, c;
 
   sync=core::sync_mask();
+
+  /*
+  shift right to conceptually compute HAC q1.
+  2 Things are happening:
+    1. Shift right (which is dividing x by b^(k-1)) by UNPADDED_BITS
+    2. Shift left (which is doing shifting to compensate for divisor shifting during approx) by denom_clz
+
+    This is done (in part) by shifting right by UNPADDED_BITS.
+      Why UNPADDED_BITS? Because we are using unpadded core. Perhaps if we used a padded core, we would use BITS?
+      Note that if denom_clz is zero, then we lose everything (HAC q1 is nothing). This is expected since num is narrow. (Narrow is like having the high half of HAC x be zero). Hence q1 would be zero.
+
+    Having -denom_clz is essentially having a shift_left to perform the same shifting we did on the denom earlier in approx() to the numerator (HAC x) as well.
+
+    Mind the padding. Probably view it as, (padding + logical bits) - (padding + real leading zeros)
+  */
   core::shift_right(high, num._limbs, UNPADDED_BITS-denom_clz);
+  // now: high = HAC q1
+
   cgbn::mpzero<LIMBS>(zero);
   singleton::mul_high(quotient, high, approx._limbs, zero);
+  // now: quottient is HAC q3. (multiplication op gives q2. The fact that its mul_high gives q3)
+  // unsure if this is actually true given the addition op that happens below.
+  // There is probably still more in play I don't understand.
+  // I think the addition is bringing us out of the alternate representation?
   
+  // semantically, these 3 lines are: quotient += (high + 3)
+  // why + 3? In the std barrett reduction, we may be off by 2. And with our approximation alternate representation, we may be off by 1 more.
   c=cgbn::mpadd<LIMBS>(quotient, quotient, high);
   c+=cgbn::mpadd32<LIMBS>(quotient, quotient, group_thread==0 ? 3 : 0);
   c=core::resolve_add(c, quotient);
   
   if(c!=0) {
+    // what is this?
     #pragma unroll
     for(int32_t index=0;index<LIMBS;index++)
       quotient[index]=0xFFFFFFFF;
   }
+
   singleton::mul_wide(low, high, denom._limbs, quotient, zero);
+  // appears high:low is now r2?
 
   word=-__shfl_sync(sync, high[0], 0, TPI);
-  c=cgbn::mpsub<LIMBS>(low, num._limbs, low);
+  // high is at most 3? (so it all fits in high[0])
+
+  c=cgbn::mpsub<LIMBS>(low, num._limbs, low); // num is r1, low is r2?
+  // low is r?
   word-=core::fast_propagate_sub(c, low);
+
   while(word!=0) {
     c=cgbn::mpadd<LIMBS>(low, low, denom._limbs);
     word+=core::fast_propagate_add(c, low);
@@ -1269,6 +1355,8 @@ __device__ __forceinline__ void cgbn_env_t<context_t, bits, syncable>::barrett_r
   uint32_t word, c;
 
   if(_context.check_errors()) {
+    // This ensures that num._high has at least as many true leading zeros as the denom.
+    // It also ensures that quoteitn fits into single width?
     if(core_unpadded::compare(num._high._limbs, denom._limbs)>=0) {
       _context.report_error(cgbn_division_overflow_error);
       return;
@@ -1277,13 +1365,42 @@ __device__ __forceinline__ void cgbn_env_t<context_t, bits, syncable>::barrett_r
 
   sync=core_unpadded::sync_mask();
   word=__shfl_sync(sync, num._high._limbs[0], 0, TPI);
+
+  /*
+  Goal of the rotates & bitwise_mask_select: Produce HAC q1.
+    - Conceptually, want to again shift right (the entire wide numerator) to produce HAC q1. But we also need to account for the left shifting done on the divisor for normalization. (we must also shift left)
+    - Ultimately, the below computation achieves the following, semantically:
+      - Assign high = num.high
+      - shift high to left by the true clz of denom (no padding), but as we shift, shift in values from num.low (that is, the more sig vals from low). (Note num.low may have padding)
+      - Now high is q1.
+      - However:
+        - What happens to the highest bits of num.high? Good question. They were definitely zeros due to the check that may report the cgbn_division_overflow_error.
+    
+    Let "true clz" refer to denom_clz - padding  =  denom_clz - (UNPADDED_BITS - BITS)
+
+    Note that both num.low and num.high would have padding. (Both or none have padding)
+  */
+
+  // After this, importantly, on the far right of low, are the highest bits of num.low. How many? true clz number of them.
+  // low goes from: [ppp543210] -> [3210ppp54] (say padding is 3 bits and true clz is 2 bits)
+  // 54 will be taken during the select.
+  // This could just as well be a shift_right, the 3210 will never be read.
   core_unpadded::rotate_left(low, num._low._limbs, denom_clz);
+
+  // This could just as well be a shift_left.
+  // All we want is to shift left by the true clz of denominator. That last parameter expr is the true clz.
+  // THE PADDING WILL REMAIN THE SAME. Some bits of high may be shifted into what was previously true leading zeros.
   core_unpadded::rotate_left(high, num._high._limbs, denom_clz-(UNPADDED_BITS-BITS));
+
+  // Assigns high. Some elements from high, some from low. The last parameter indicates how many are taken from low. So the left portion will be from high, the right portion will be from low. The partition point is given by last parameter. [abcd], [1234], 1 -> [abc4]
+  // Last param will never be negative. If there is no padding, nothing is subtract. If there is padding, then denom_clz will be at least that big since it will have that padding too.
   core_unpadded::bitwise_mask_select(high, high, low, denom_clz-(UNPADDED_BITS-BITS));
+
   cgbn::mpzero<LIMBS>(zero);
   singleton::mul_high(quotient, high, approx._limbs, zero);
   
-  c=cgbn::mpadd<LIMBS>(quotient, quotient, high);
+  // semantically: quotient += (high + 3)   and   carry = carry out from the entire thing.
+  c=cgbn::mpadd<LIMBS>(quotient, quotient, high); // does adding high put us back into the regular representation? (from the alternate)...
   c+=cgbn::mpadd32<LIMBS>(quotient, quotient, group_thread==0 ? 3 : 0);
   c=core_padded::resolve_add(c, quotient);
   
